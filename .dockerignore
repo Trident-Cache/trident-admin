@@ -1,0 +1,7 @@
+node_modules
+sdk/node_modules
+sdk/dist
+.next
+.git
+.env
+.env.*

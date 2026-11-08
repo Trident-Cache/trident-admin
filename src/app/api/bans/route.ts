@@ -1,0 +1,28 @@
+import { NextResponse } from 'next/server';
+import { trident, TridentError } from '@/lib/trident';
+
+export const dynamic = 'force-dynamic';
+
+export async function GET() {
+  try {
+    return NextResponse.json(await trident.bans());
+  } catch (err) {
+    if (err instanceof TridentError) {
+      return NextResponse.json({ error: err.message }, { status: err.statusCode || 502 });
+    }
+    return NextResponse.json({ error: 'Internal error' }, { status: 500 });
+  }
+}
+
+export async function POST(request: Request) {
+  try {
+    const body = await request.json();
+    const result = await trident.createBan(body.pattern, body.type || 'url');
+    return NextResponse.json(result);
+  } catch (err) {
+    if (err instanceof TridentError) {
+      return NextResponse.json({ error: err.message }, { status: err.statusCode || 502 });
+    }
+    return NextResponse.json({ error: 'Internal error' }, { status: 500 });
+  }
+}
