@@ -32,7 +32,8 @@ const trident = createClient({
 });
 
 // Purge by URL
-await trident.purgeUrl({ url: '/products/123' });
+// Give the full URL (or `host`): a path alone names no host.
+await trident.purgeUrl({ url: 'https://www.example.com/products/123' });
 
 // Purge by tags
 await trident.purgeByTags({ tags: ['product-123', 'catalog'] });

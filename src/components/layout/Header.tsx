@@ -3,6 +3,7 @@
 import { usePathname, useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { Icon } from '@/components/ui/primitives';
+import { apiUrl } from '@/lib/format';
 
 const TITLES: Record<string, string> = {
   '/': 'Overview',
@@ -27,7 +28,7 @@ function titleFor(pathname: string): string {
   return TITLES[base] ?? 'Trident Admin';
 }
 
-export function Header() {
+export function Header({ canSignOut = false }: { canSignOut?: boolean }) {
   const pathname = usePathname() ?? '/';
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -38,6 +39,12 @@ export function Header() {
     setSpin(true);
     startTransition(() => router.refresh());
     setTimeout(() => setSpin(false), 600);
+  };
+
+  // A full page load afterwards, so nothing fetched under the old session stays on screen.
+  const signOut = async () => {
+    await fetch(apiUrl('/api/auth/logout'), { method: 'POST', cache: 'no-store' }).catch(() => undefined);
+    window.location.assign(apiUrl('/login'));
   };
 
   return (
@@ -64,6 +71,11 @@ export function Header() {
             <Icon name="refresh" size={14} />
           </span>
         </button>
+        {canSignOut && (
+          <button className="btn btn-sm" onClick={signOut} title="End this session">
+            Sign out
+          </button>
+        )}
       </div>
     </header>
   );

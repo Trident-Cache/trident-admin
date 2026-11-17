@@ -472,7 +472,8 @@ export class TridentClient {
   async purgeTagPattern(options: PurgeByTagPatternOptions): Promise<PurgeResponse> {
     return this.purgeRequest('/admin/purge/tag/pattern', {
       pattern: options.pattern,
-      type: options.patternType ?? 'wildcard',
+      // The engine reads `pattern_type`; `type` was ignored, so a regex purge ran as a wildcard.
+      pattern_type: options.patternType ?? 'wildcard',
     });
   }
 

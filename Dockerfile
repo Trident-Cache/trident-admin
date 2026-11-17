@@ -28,7 +28,19 @@ RUN npm run build
 
 FROM node:22-alpine AS runner
 WORKDIR /app
-ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=4001 HOSTNAME=0.0.0.0
+ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=4001
+# Unless TRIDENT_PANEL_PASSWORD is set, the panel has no login: whoever can
+# reach this port can purge the cache, drain backends and start a launch.
+# Inside a container it has to listen on the container network to be reachable
+# at all, so publish the port to this host's loopback only:
+#
+#   -p 127.0.0.1:4001:4001
+#
+# and set TRIDENT_PANEL_PASSWORD, or put a reverse proxy with authentication in
+# front (HOWTO.md, step 6), or both. A bare `-p 4001:4001` publishes it on every
+# interface of the host. For a health check, probe /api/live (under the base
+# path, if one is set): it needs no session and reveals nothing else.
+ENV HOSTNAME=0.0.0.0
 RUN addgroup -g 1001 -S nodejs && adduser -S nextjs -u 1001
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static

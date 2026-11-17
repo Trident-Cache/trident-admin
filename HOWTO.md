@@ -9,12 +9,18 @@
 
 ## Security Warning
 
-**The admin dashboard MUST be secured with HTTP Basic Authentication (or equivalent)
-when exposed to the internet.** It provides full access to cache management operations
-including purging, banning, and viewing request/response headers from your origin server.
+**The admin dashboard MUST be protected by a login when anyone but you can reach it.**
+It provides full access to cache management operations including purging, banning,
+and viewing request/response headers from your origin server.
 
-Never expose the admin dashboard without authentication. Use nginx `auth_basic` or
-your reverse proxy's equivalent.
+The dashboard has a login of its own, which is **off until you set
+`TRIDENT_PANEL_PASSWORD`** (step 3). While it is off, the dashboard logs a warning
+at start and shows a red banner on every screen. Either turn it on, or protect the
+dashboard with nginx `auth_basic` or your reverse proxy's equivalent (step 6), or
+both. Never expose it with neither.
+
+Whatever you choose, serve it over HTTPS: the session cookie and any Basic
+Authentication credentials must not travel in clear text.
 
 ## 1. Install the SDK
 
@@ -56,7 +62,35 @@ TRIDENT_AUTH_TOKEN=your-secret-token
 
 # Base path if serving under a subpath (e.g. /trident-admin)
 NEXT_PUBLIC_BASE_PATH=/trident-admin
+
+# The dashboard's own login. Off while unset. At least 12 characters and not
+# built from common words (password, admin, changeme, trident, ...), or the
+# dashboard refuses to start -- as it does with this placeholder until you
+# replace it.
+TRIDENT_PANEL_PASSWORD=changeme
+
+# Key that signs session cookies, 32 characters or more (openssl rand -base64 48).
+# Unset, a random key is made at each start and sessions end on every restart.
+TRIDENT_PANEL_SESSION_SECRET=
+
+# How long a sign-in lasts, in hours (default 12).
+# TRIDENT_PANEL_SESSION_HOURS=12
+
+# Hosts the sitemap warmer may fetch although they resolve to internal
+# addresses (comma-separated, exact names). Empty: public addresses only.
+# TRIDENT_PANEL_SITEMAP_ALLOWED_HOSTS=shop.internal
 ```
+
+With `TRIDENT_PANEL_PASSWORD` set, every page asks for the password first and
+every API call without a session is answered with `401`. Ten wrong passwords
+from one address within five minutes block that address for the rest of the
+five minutes. **Sign out** is in the top bar. See `README.md`, "Login", for the
+details.
+
+The sitemap warmer (`POST /api/warmer/sitemap`) only fetches from hosts whose
+every address is public, and checks each redirect again. If you warm from a
+sitemap on an internal host, the request fails with a message naming the host:
+add that host to `TRIDENT_PANEL_SITEMAP_ALLOWED_HOSTS` and restart the dashboard.
 
 ## 4. Configure next.config.js
 
@@ -97,7 +131,13 @@ The dashboard runs on port 4001 by default.
 
 ## 6. Configure nginx with Basic Auth
 
-**This step is critical for security.**
+**This step is critical for security** unless the dashboard's own login is on
+(step 3). With the login on, Basic Auth is optional: it adds per-user accounts
+in front of the shared password. Either way nginx terminates TLS, and it must
+pass the original `Host` header and `X-Forwarded-Proto`, as below: the dashboard
+uses them to recognise its own pages (it refuses state-changing requests that a
+browser marks as coming from another site) and to mark the session cookie
+`Secure`. `X-Forwarded-For` is what the sign-in rate limit counts by.
 
 Create a password file:
 
@@ -249,20 +289,32 @@ services:
       context: ./integrations       # must include both js-library/ and nextjs-admin/
       dockerfile: nextjs-admin/Dockerfile
     ports:
-      - "4001:4001"
+      - "127.0.0.1:4001:4001"         # this host only — nginx (step 6) is the public entry
     environment:
+      - HOSTNAME=0.0.0.0              # listen on the compose network (the image default)
       - TRIDENT_ADMIN_URL=http://trident:9303
       - TRIDENT_AUTH_TOKEN=your-secret-token
       - NEXT_PUBLIC_BASE_PATH=/trident-admin
+      - TRIDENT_PANEL_PASSWORD=changeme            # replace; refused as it is
+      - TRIDENT_PANEL_SESSION_SECRET=              # optional: 32+ random characters
     depends_on:
       - trident
     restart: unless-stopped
 ```
 
+For a container health check, probe `/api/live` (here
+`http://127.0.0.1:4001/trident-admin/api/live`). It answers without a session
+and reports nothing but that the dashboard process is up.
+
 With this setup:
 - Trident runs on ports 8120 (cache proxy) and 9303 (admin API)
 - The admin dashboard connects to Trident via the Docker network (`http://trident:9303`)
-- You still need nginx or a reverse proxy in front for SSL and basic auth (see step 6)
+- You still need nginx or a reverse proxy in front for SSL, and for basic auth
+  if you leave the dashboard's own login off (see step 6)
+- Without `TRIDENT_PANEL_PASSWORD` the dashboard has no login — anyone who can
+  reach port 4001 can purge the cache. `127.0.0.1:4001:4001` publishes it to
+  this host's loopback only, where the reverse proxy picks it up. Do not publish
+  it as a bare `4001:4001`, which listens on every interface of the host.
 
 **Common issue:** If `curl http://localhost:9303` returns "Connection reset by peer",
 the admin API is not enabled in your `config.toml`. Add the `[admin]` section above
@@ -271,12 +323,14 @@ and restart Trident.
 ## Architecture
 
 ```
-Browser → nginx:443 (SSL + Basic Auth) → Next.js:4001 → Trident Admin API:9303
-                                              ↓
-                                    SSE proxy for events
+Browser → nginx:443 (SSL, optional Basic Auth) → Next.js:4001 (login) → Trident Admin API:9303
+                                                       ↓
+                                             SSE proxy for events
 ```
 
 - The admin dashboard runs as a Next.js server on port 4001
 - All Trident API calls are made server-side (SSR) - the browser never talks to Trident directly
-- SSE (Server-Sent Events) for real-time events are proxied through a Next.js API route
-- nginx handles SSL termination and basic authentication
+- SSE (Server-Sent Events) for real-time events are proxied through a Next.js API route.
+  The dashboard holds one upstream stream per kind of event and shares it between
+  all open tabs, so tabs do not use up Trident's per-address connection limit
+- nginx handles SSL termination, and basic authentication when you use it

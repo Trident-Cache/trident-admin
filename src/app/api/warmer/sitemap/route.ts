@@ -1,12 +1,20 @@
 import { NextResponse } from 'next/server';
 import { trident, TridentError } from '@/lib/trident';
+import { parseAllowedHosts } from '@/lib/panel/address';
+import { ALLOWED_HOSTS_ENV, FetchRefusedError, guardedFetchText } from '@/lib/panel/guarded-fetch';
 
 export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 
 // Guards so a single sitemap submission can't fan out unbounded.
 const MAX_CHILD_SITEMAPS = 50;
 const MAX_URLS = 50_000;
 const FETCH_TIMEOUT_MS = 15_000;
+const MAX_SITEMAP_BYTES = 20 * 1024 * 1024;
+const MAX_REDIRECTS = 5;
+// Refusals are reported back so the operator learns which host to allow; a
+// sitemap index can name many children, so only the first few are listed.
+const MAX_REPORTED_REFUSALS = 10;
 
 function decodeEntities(s: string): string {
   return s
@@ -29,20 +37,22 @@ function extractLocs(xml: string): string[] {
   return out;
 }
 
+/**
+ * Fetch one sitemap document. The URL comes from the caller (or from a sitemap
+ * the caller pointed at), so it is fetched under the rules of
+ * `guardedFetchText`: http(s) only, no host that resolves to a loopback,
+ * private, link-local or otherwise non-public address unless the operator
+ * listed it in TRIDENT_PANEL_SITEMAP_ALLOWED_HOSTS, and the same check again
+ * after every redirect.
+ */
 async function fetchText(url: string): Promise<string> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const res = await fetch(url, {
-      signal: ctrl.signal,
-      cache: 'no-store',
-      headers: { 'User-Agent': 'Trident-Admin/sitemap-warmer', Accept: 'application/xml,text/xml,*/*' },
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.text();
-  } finally {
-    clearTimeout(timer);
-  }
+  return guardedFetchText(url, {
+    allowedHosts: parseAllowedHosts(process.env[ALLOWED_HOSTS_ENV]),
+    timeoutMs: FETCH_TIMEOUT_MS,
+    maxBytes: MAX_SITEMAP_BYTES,
+    maxRedirects: MAX_REDIRECTS,
+    headers: { 'User-Agent': 'Trident-Admin/sitemap-warmer', Accept: 'application/xml,text/xml,*/*' },
+  });
 }
 
 /**
@@ -72,6 +82,9 @@ export async function POST(request: Request) {
     try {
       root = await fetchText(sitemapUrl);
     } catch (e) {
+      if (e instanceof FetchRefusedError) {
+        return NextResponse.json({ error: e.message, refusedHost: e.host }, { status: 400 });
+      }
       return NextResponse.json(
         { error: `Could not fetch sitemap: ${e instanceof Error ? e.message : 'unreachable'}` },
         { status: 502 }
@@ -81,6 +94,7 @@ export async function POST(request: Request) {
     const isIndex = /<sitemapindex[\s>]/i.test(root);
     let urls: string[] = [];
     let sitemapsFetched = 1;
+    const refused: string[] = [];
 
     if (isIndex) {
       const children = extractLocs(root).slice(0, MAX_CHILD_SITEMAPS);
@@ -88,8 +102,12 @@ export async function POST(request: Request) {
         try {
           urls.push(...extractLocs(await fetchText(child)));
           sitemapsFetched++;
-        } catch {
-          // A broken child sitemap is skipped, not fatal.
+        } catch (e) {
+          // A broken child sitemap is skipped, not fatal. One that was refused
+          // is skipped too, and reported.
+          if (e instanceof FetchRefusedError && refused.length < MAX_REPORTED_REFUSALS && !refused.includes(e.message)) {
+            refused.push(e.message);
+          }
         }
         if (urls.length >= MAX_URLS) break;
       }
@@ -99,7 +117,13 @@ export async function POST(request: Request) {
 
     urls = Array.from(new Set(urls)).slice(0, MAX_URLS);
     if (urls.length === 0) {
-      return NextResponse.json({ error: 'No <loc> URLs found in the sitemap' }, { status: 422 });
+      return NextResponse.json(
+        {
+          error: refused.length > 0 ? `No <loc> URLs found in the sitemap. ${refused[0]}` : 'No <loc> URLs found in the sitemap',
+          ...(refused.length > 0 ? { refused } : {}),
+        },
+        { status: 422 }
+      );
     }
 
     const res = await trident.warmerQueue(urls);
@@ -109,6 +133,7 @@ export async function POST(request: Request) {
       sitemapsFetched,
       urls: urls.length,
       queued: res?.received ?? urls.length,
+      ...(refused.length > 0 ? { refused } : {}),
     });
   } catch (err) {
     if (err instanceof TridentError) {

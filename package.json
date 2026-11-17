@@ -1,6 +1,6 @@
 {
   "name": "@trident-cache/admin",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "private": true,
   "license": "MIT",
   "description": "Trident Cache Admin Dashboard - Full-featured admin panel for Trident HTTP Cache",
@@ -9,20 +9,20 @@
     "build": "next build",
     "start": "next start -p 4001",
     "lint": "tsc --noEmit",
-    "test:ci": "node scripts/dns-page-contract-test.mjs"
+    "test:ci": "node scripts/dns-page-contract-test.mjs && node --test scripts/panel-*.test.mjs"
   },
   "dependencies": {
     "@trident-cache/sdk": "file:./sdk",
-    "next": "^16.4.2",
+    "next": "^16.4.5",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4.3.3",
+    "@tailwindcss/postcss": "^4.3.4",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "postcss": "^8.5.30",
+    "postcss": "^8.5.32",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.0"
   }
